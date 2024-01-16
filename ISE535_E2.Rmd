@@ -1,0 +1,210 @@
+---
+title: "ISE535 Exam 2"
+author: "Zedan Zhao, USC ID 6994-0934-56"
+date: "2023-04-27"
+output:
+  pdf_document: default
+---
+## 1. Here we develop a classification model to predict if a text message is spam or not, using the words in the message. The file sms.csv has sms messages. Column type identifies the message as spam or non-spam (called ham). Column text has the text message. Use the following code to store this file into a dataframe with 2 character columns, then convert the first column to a factor. The classification model will predict if the message is spam by using the words in the message ignoring the order of the words. Thus, first we need to clean the data, split the message into words, then build the model.
+
+```{r}
+#data preparation
+
+library(tm) 
+# VCorpus( ), tm_map( ), findFreqTerms( )
+# read all as character columns
+df0 <- read.csv("sms.csv", stringsAsFactors = FALSE)
+str(df0)
+
+#convert the first column to a factor
+df0$type <- factor(df0$type)
+```
+
+## a) Text messages may contain words, spaces, numbers, and punctuation. To split the message into individual words, noise characters need to be removed. The text data mining library tm is useful.
+
+```{r}
+# build a corpus (a collection of messages suitable for text mining)
+sms_corpus <- VCorpus(VectorSource(df0$text))
+
+# examine it
+as.character(sms_corpus[[1]])
+lapply(sms_corpus[1:2], as.character)
+
+# change all words to lowercase
+sms_corpus_clean <- tm_map(sms_corpus, content_transformer(tolower))
+as.character(sms_corpus_clean[[1]])
+
+# remove numbers
+sms_corpus_clean <- tm_map(sms_corpus_clean, removeNumbers)
+
+# remove stop words
+sms_corpus_clean <- tm_map(sms_corpus_clean, removeWords, stopwords())
+
+# remove punctuation
+sms_corpus_clean <- tm_map(sms_corpus_clean, removePunctuation)
+
+# example of word stemming
+library(SnowballC)
+wordStem(c("learn", "learned", "learning", "learns"))
+#
+# replace words by stem words
+sms_corpus_clean <- tm_map(sms_corpus_clean, stemDocument)
+
+# eliminate unneeded whitespace
+sms_corpus_clean <- tm_map(sms_corpus_clean, stripWhitespace)
+
+# compare original with the final clean corpus
+lapply(sms_corpus[1:3], as.character)
+lapply(sms_corpus_clean[1:3], as.character)
+```
+
+## b) (10 pts.) Convert the tm object sms_corpus_clean to a Document term matrix DTM as follows. How many binary columns does the matrix has?
+
+```{r}
+sms_dtm <- DocumentTermMatrix(sms_corpus_clean)
+
+# Convert sms_corpus_clean to binary DTM
+sms_binary_dtm <- DocumentTermMatrix(sms_corpus_clean, control = list(weighting = weightBin))
+
+# Get the number of binary columns in the DTM
+ncol(sms_binary_dtm)
+
+```
+
+## c) (10 pts.) Split the matrix into train set (first 4169 rows) and test set. Further simplify these sets by keeping words that appear at least 5 times in the data.
+
+```{r}
+sms_dtm <- DocumentTermMatrix(sms_corpus_clean)
+dim(sms_dtm)
+
+# split into train and test sets
+m = 4169
+sms_dtm_train <- sms_dtm[1:m, ]
+sms_dtm_test <- sms_dtm[(m+1):5559, ]
+dim(sms_dtm_train)
+sms_train_labels <- df0[1:m, ]$type
+sms_test_labels <- df0[(m+1):5559, ]$type
+
+# vector with words appearing at least 5 times
+sms_freq_words <- findFreqTerms(sms_dtm_train, 5)
+
+# show some of them
+set.seed(2)
+sample(sms_freq_words,12)
+
+# DTMs with only the frequent terms
+sms_dtm_freq_train <- sms_dtm_train[ , sms_freq_words]
+sms_dtm_freq_test <- sms_dtm_test[ , sms_freq_words]
+
+# a function that converts 1/0 to Yes/No
+convert_counts = function(x) x = ifelse(x > 0, "Yes", "No")
+
+# Use convert_counts() to the columns of the train/test sets
+sms_train <- apply(sms_dtm_freq_train, 2, convert_counts)
+sms_test <- apply(sms_dtm_freq_test, 2, convert_counts)
+dim(sms_test)
+```
+
+## d) (20 pts.) Use the train set to build a Naive Bayes model. Use it to predict the test set with threshold equal to 0.50. Report the TPR and FPR.
+
+### The TPR is 0.8360656
+### The FPR is 0.004971002
+
+```{r}
+# add type to train and test dataset
+sms_train <- as.data.frame(sms_train)
+sms_test <- as.data.frame(sms_test)
+sms_train$type_y <-  as.factor(sms_train_labels)
+sms_test$type_y <-  as.factor(sms_test_labels)
+
+library(e1071)
+
+# build Naive Bayes model using train set
+m1 <- naiveBayes(type_y~., sms_train)
+
+# predict 
+probs <- predict(m1, sms_test, type="raw")
+
+# Apply threshold of 0.50 to obtain binary predictions
+ypred <- ifelse(probs[, "spam"] > 0.50, "spam", "ham")
+ytest <- sms_test$type_y
+
+# Compute confusion matrix
+conf_mat <- as.matrix(table(ytest, ypred))
+conf_mat
+
+#Calculate the accuracy rate
+accuracy1 <- sum(diag(conf_mat)) / sum(conf_mat)
+accuracy1
+
+#Set spam as TRUE, ham as FALSE
+TPR <- conf_mat[2,2]/(conf_mat[2,1]+conf_mat[2,2])
+FPR <- conf_mat[1,2]/(conf_mat[1,1]+conf_mat[1,2])
+TPR
+FPR
+```
+
+## e) (20 pts.) Change the threshold to improve the test positive accuracy rate. Report the improved TPR and FPR.
+
+### In order to find the threshold to maximize the TPR and accuracy rate, I generated a sequence of thresholds ranging from 0.001 to 0.999 and then loop over them to calculate the TPR, FPR for each threshold. Consider the trade-off between FPR and TPR, I decided to choose the threshold that maximize the accuracy rate, instead of the true positive rate.  
+### Therefore, the results indicate that by adjusting the threshold to 0.236, we can maximize the accuracy rate(0.976259) of the model and achieve a TPR of 0.863388 and an FPR of 0.006628003. Compared to the default threshold of 0.5, this represents an improvement in the TPR from 0.8360656 to 0.863388.
+
+```{r}
+# generate a sequence of thresholds to test
+thresholds <- seq(0.001, 0.999, by = 0.001)
+
+# initialize variables to store results
+TPR2 <- numeric(length(thresholds))
+FPR2 <- numeric(length(thresholds))
+TP_acc <- numeric(length(thresholds))
+
+
+# loop over thresholds and compute metrics
+for (i in seq_along(thresholds)) {
+  
+  # predict labels based on threshold
+  ypred2 <- ifelse(probs[, "spam"] > thresholds[i], "spam", "ham")
+  
+  # compute confusion matrix
+  conf_mat2 <- table(ytest, ypred2)
+  
+  # calculate TPR and FPR
+  TPR2[i] <- conf_mat2[2,2]/(conf_mat2[2,1]+conf_mat2[2,2])
+  FPR2[i] <- conf_mat2[1,2]/(conf_mat2[1,1]+conf_mat2[1,2])
+  
+  # calculate test positive accuracy rate
+  TP_acc[i] <- sum(diag(conf_mat2)) / sum(conf_mat2)
+}
+
+# find threshold that maximizes test positive accuracy rate
+best_threshold <- thresholds[which.max(TP_acc)]
+best_TPR <- TPR2[which.max(TP_acc)]
+best_FPR <- FPR2[which.max(TP_acc)]
+
+# print results
+cat("Best threshold:", best_threshold, "\n")
+cat("TPR:", best_TPR, "\n")
+cat("FPR:", best_FPR, "\n")
+```
+
+### 2. (30 pts.) The following US map shows the number of coronavirus cases per 100000 residents for each county as of April 21, 2020. The file usmap.csv has the relevant data (the size of the circles shows the number of cases in each county). You may ignore the cases in the state of Louisiana. You may use Google maps or work offline. Use R to reproduce the map (continental US only, you may ignore Alaska) as close as possible.
+
+```{r}
+library(ggmap)
+
+us <- c(left = -125, bottom = 25.75, right = -67, top = 49)
+US.map = get_stamenmap(us, zoom = 5, maptype = "toner-lite")
+
+d3 <- read.csv("usmap.csv")
+
+# ignore counties with small number of cases
+d3 = d3[d3$cases > 22,]
+# cases per 100000 residents
+d3$cases = 100000*d3$cases/d3$population
+
+
+ggmap(US.map) +
+  geom_point(data =d3, aes(x = lon, y = lat, size = cases),
+             alpha = 0.6, fill="thistle3",shape = 21,stroke = 0.3) +
+  scale_size(range = c(0, 8))
+```
